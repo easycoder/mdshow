@@ -1,15 +1,15 @@
-!! Show DIFF.md in a desktop window, re-rendering it whenever the file changes.
+!! Show a text file in a desktop window, rendering markdown as formatted prose and anything else as plain text, and re-read it whenever it changes.
 !!
-!! Run with `allspeak mdshow`. This is a desktop application rather than a browser one, so the window comes from the Python runtime's graphics domain rather than from Webson.
+!! Run with `allspeak mdshow`. This is a desktop application rather than a browser one, so the window comes from the Python runtime's graphics domain rather than from Webson. The file to watch is named in `.mdshow.conf`; when no name is there, and whenever Select File is pressed, the operating system's own chooser supplies one, and the window is titled with the path of whichever file is being watched.
 
 !   mdshow.allspeak
 
-    script Diffshow
+    script Mdshow
 
-!! @hash daa9b937
+!! @hash 00cd2d7c
 !!!
 
-!! Load the desktop graphics domain, which supplies the window, the markdown panel and the Qt event loop this script is built on.
+!! Load the desktop graphics domain, which supplies the window, the native file chooser, the two panels and the Qt event loop this script is built on.
 
     use graphics
 
@@ -19,19 +19,23 @@
 
 !! Declare the widgets the script builds.
 !!
-!! Widget variables must exist before `create` can instantiate them. `mdpanel` is a read-only markdown panel — setting its text converts markdown to HTML and renders it, so DIFF.md reaches the screen as formatted prose rather than as raw source. It is created without `cols`/`rows` so that it expands to fill the window instead of being pinned to a character grid.
+!! Widget variables must exist before `create` can instantiate them. `DocPanel` is a `mdpanel` — a read-only panel whose text setter converts markdown to HTML, so a markdown file reaches the screen as formatted prose. `SourceView` is a `multiline` built `readonly`, the plain-text counterpart that every other kind of file goes to. Neither is given `cols`/`rows`, so both expand to fill the window, and only one of them is ever visible. `OpenDlg` is a `file` dialog: the OS's own chooser, whose result is the path the user picked.
 
     window MainWindow
     layout Panel
+    layout TopRow
+    pushbutton OpenButton
     mdpanel DocPanel
+    multiline SourceView
+    dialog OpenDlg
 
 
-!! @hash 3469f189
+!! @hash f4746f30
 !!!
 
-!! Declare the state shared between the startup path, the poller and the close handler.
+!! Declare the state shared between the startup path, the poller and the event handlers.
 !!
-!! `Conf` is the saved geometry, `HaveGeometry` records whether a usable one was found, and `WinX`/`WinY`/`WinW`/`WinH` carry it to the `create` call. `Contents` is the text just read from DIFF.md and `Shown` is what the panel is currently displaying.
+!! `Conf` is the saved configuration — window geometry plus the watched file — `HaveGeometry` records whether a usable geometry was found, and `WinX`/`WinY`/`WinW`/`WinH` carry it to the `create` call. `Watched` is the path being watched and `ShownFile` the path the panel is currently showing; `Contents` is the text just read and `Shown` the text on screen. `Chosen` receives the chooser's result, and `Lower` holds the lower-cased path used to spot a markdown extension.
 
     dictionary Conf
     variable HaveGeometry
@@ -39,30 +43,37 @@
     variable WinY
     variable WinW
     variable WinH
+    variable Watched
+    variable ShownFile
     variable Contents
     variable Shown
+    variable Chosen
+    variable Lower
 
 
-!! @hash 539cb056
+!! @hash 00e7bcbd
 !!!
 
 !! Start from a known state before anything reads it.
 !!
-!! `reset` empties the dictionary and `clear` sets the boolean false — a flag must be initialised before it can be tested. Leaving `Shown` empty means the poller's first pass always renders, even if DIFF.md itself is empty.
+!! `reset` empties the dictionary and `clear` sets the boolean false — a flag must be initialised before it can be tested. Leaving `Shown` and `ShownFile` empty means the poller's first pass always renders, even if the watched file is itself empty.
 
     reset Conf
     clear HaveGeometry
+    put empty into Watched
+    put empty into ShownFile
     put empty into Shown
+    put empty into Contents
 
 
-!! @hash 115fbaa1
+!! @hash 93d4fce1
 !!!
 
-!! Recover the window geometry saved by a previous run.
+!! Recover the window geometry and the file to watch, both saved by a previous run.
 !!
-!! Relative paths resolve against this script's own folder, so `` `.mdshow.conf` `` and `` `DIFF.md` `` are read from the project directory however the script is launched. On a first run the config file does not exist and the `on failure` clause leaves `HaveGeometry` false, so the script falls back to a default size and lets Qt centre the window.
+!! Relative paths resolve against this script's own folder, so `.mdshow.conf` is read from the project directory however the script is launched. On a first run the config file does not exist and the `on failure` clause clears `HaveGeometry`, so the script falls back to a default size and lets Qt centre the window; `Watched` stays empty and the chooser runs instead.
 !!
-!! All four values are required: a truncated or hand-edited file is ignored rather than half-applied, which is why this is one four-way test instead of four reads of entries that might not be there.
+!! All four geometry values are required: a truncated or hand-edited file is ignored rather than half-applied, which is why this is one four-way test instead of four reads of entries that might not be there. The `file` entry is independent of them — a path named there is watched whatever the geometry says.
 
     if file `.mdshow.conf` exists
     begin
@@ -76,10 +87,12 @@
             put entry `height` of Conf into WinH
             set HaveGeometry
         end
+        if Conf has entry `file`
+            put entry `file` of Conf into Watched
     end
 
 
-!! @hash 7f7216bb
+!! @hash 8abab847
 !!!
 
 !! Hand control to Qt.
@@ -92,76 +105,163 @@
 !! @hash d57326f7
 !!!
 
-!! Build the interface — layout, panel, window.
+!! Build the interface — button row, panels, window, chooser.
 !!
-!! The layout is populated before the window exists because `create … layout Panel` attaches it immediately. Only the window's geometry differs between runs, and it can only be set at `create` time, which is why the values recovered above are read here instead of applied afterwards.
+!! The layouts are populated before the window exists because `create … layout Panel` attaches the vertical one immediately. `SourceView` is hidden as it is built so that only the markdown panel takes up space until the first render decides which of the two the watched file needs. The window is created titled `mdshow`, the name it keeps until a file is settled on. Only the window's geometry differs between runs, and it can only be set at `create` time, which is why the values recovered above are read here instead of applied afterwards.
 
     create Panel type QVBoxLayout
+    create TopRow type QHBoxLayout
+    create OpenButton text `Select File`
+    add OpenButton to TopRow
+    add stretch to TopRow
+    add TopRow to Panel
+
     create DocPanel
+    create SourceView readonly
     add DocPanel to Panel
+    add SourceView to Panel
+    hide SourceView
 
     if HaveGeometry
-        create MainWindow title `DIFF.md` at WinX WinY size WinW WinH
+        create MainWindow title `mdshow` at WinX WinY size WinW WinH
     else
-        create MainWindow title `DIFF.md` size 800 600
+        create MainWindow title `mdshow` size 800 600
 
     set the layout of MainWindow to Panel
+    create OpenDlg on MainWindow type file title `Select a file`
 
 
-!! @hash 1e3e8dfb
+!! @hash ef8c5446
 !!!
 
-!! Register the close handler while the window still exists to be closed.
+!! Register the close and click handlers while the window and the button still exist to receive them.
 !!
-!! This is the last point at which the position can be read back, so the handler that saves it has to be in place before the window is shown.
+!! The close handler is the last point at which the position can be read back, so it has to be in place before the window is shown.
 
-    on close MainWindow go to SaveGeometry
+    on close MainWindow go to SaveState
+    on click OpenButton go to SelectClick
 
 
-!! @hash a5c47e1d
+!! @hash 5bdaac32
 !!!
 
-!! Show the window and start the watcher.
+!! Show the window, name it after the file if one was remembered, then start the watcher.
 !!
-!! The main flow ends at `stop`: the window and the poller are separate threads that keep running under the event loop, and the program exits when the last window closes.
+!! A remembered file is what the window is titled with; with no file, the chooser runs and titles the window as soon as a path is accepted, and a cancel leaves the `mdshow` it was created with. The chooser runs before the poller is forked so that a first run does not spend its opening second rendering the empty state. The main flow ends at `stop`: the window, the chooser and the poller are separate threads that keep running under the event loop, and the program exits when the last window closes.
 
     show MainWindow
-    fork to PollDiff
+    if Watched is empty
+        gosub ChooseFile
+    else
+        set the title of MainWindow to Watched
+    fork to PollFile
     stop
 
 
-!! @hash 61ea5ab9
+!! @hash 1fd68d4d
 !!!
 
-!! Re-read DIFF.md once a second and re-render the panel only when the text has changed.
+!! Re-read the watched file once a second and re-render only when something has changed.
 !!
-!! The `wait` is what lets the rest of the program run between passes — a loop without it would starve the UI, since threads are cooperative and yield only at `wait`, blocking I/O or `stop`. The `file … exists` test keeps a missing file from raising an error every second; the panel says so instead.
+!! The `wait` is what lets the rest of the program run between passes — a loop without it would starve the UI, since threads are cooperative and yield only at `wait`, blocking I/O or `stop`. It sits outside every `gosub` on purpose: threads share one return stack, so a label that suspended between `gosub` and `return` would hand its frames back to whichever thread ran next.
 
-PollDiff:
-    if file `DIFF.md` exists
+PollFile:
+    gosub Refresh
+    wait 1 second
+    go to PollFile
+
+
+!! @hash 9c253f0f
+!!!
+
+!! Read the watched file and render it if the file or its text has changed.
+!!
+!! An empty `Watched` is the state reached by cancelling the chooser: the panel says so rather than going blank. The `file … exists` test keeps a missing file from raising an error every second, and comparing `ShownFile` as well as `Shown` is what makes choosing a different file redraw even when both files hold the same text.
+
+Refresh:
+    if Watched is empty
+        put `No file selected.` into Contents
+    else
     begin
-        load Contents from `DIFF.md`
-        on failure put `DIFF.md could not be read.` into Contents
+        if file Watched exists
+        begin
+            load Contents from Watched
+            on failure put `Could not read ` cat Watched cat `.` into Contents
+        end
+        else
+            put Watched cat ` is not there.` into Contents
+    end
+    if Contents is not Shown or Watched is not ShownFile
+        gosub Render
+    return
+
+
+!! @hash 05bf086b
+!!!
+
+!! Write the current text to whichever panel matches the kind of file.
+!!
+!! A markdown file goes to the `mdpanel`, which renders it as formatted prose; anything else goes to the read-only plain-text field exactly as it was read. The two widgets take turns in one slot of the layout, so the one not in use is hidden rather than removed.
+
+Render:
+    put lowercase Watched into Lower
+    if Lower ends with `.md` or Lower ends with `.markdown`
+    begin
+        hide SourceView
+        show DocPanel
+        set the text of DocPanel to Contents
     end
     else
-        put `No DIFF.md in ` cat cwd into Contents
-    if Contents is not Shown
     begin
-        set the text of DocPanel to Contents
-        put Contents into Shown
+        hide DocPanel
+        show SourceView
+        set the text of SourceView to Contents
     end
-    wait 1 second
-    go to PollDiff
+    put Contents into Shown
+    put Watched into ShownFile
+    return
 
 
-!! @hash 1dfd4464
+!! @hash ad3c54a8
 !!!
 
-!! Save the window's size and position as the program shuts down.
+!! Ask the user for a file with the system chooser and adopt the choice.
+!!
+!! `show` blocks in the native chooser until it closes, and reading the result afterwards gives the chosen path, or an empty string if the user cancelled — so an empty `Chosen` leaves the watched file alone. An accepted path is written to the configuration straight away, so it survives even a run that is killed rather than closed, and retitles the window, whose caption is the only place the full path is on show.
+
+ChooseFile:
+    show OpenDlg
+    put OpenDlg into Chosen
+    if Chosen is empty
+        return
+    put Chosen into Watched
+    set the title of MainWindow to Watched
+    set entry `file` of Conf to Watched
+    save prettify Conf to `.mdshow.conf`
+    gosub Refresh
+    return
+
+
+!! @hash e2f12dc9
+!!!
+
+!! Handle a click on the Select File button.
+!!
+!! The button's only job is to reopen the chooser, so the handler is the shared `ChooseFile` step followed by the `stop` that ends an event handler's thread.
+
+SelectClick:
+    gosub ChooseFile
+    stop
+
+
+!! @hash 282f0743
+!!!
+
+!! Save the window's size and position, and the watched file, as the program shuts down.
 !!
 !! The handler runs inside the close event, before Qt destroys the window and before the runtime ends the program as its last window goes — so it runs straight through to `stop` with nothing in between that could yield. The JSON is written pretty-printed to keep the file readable by hand.
 
-SaveGeometry:
+SaveState:
     put the x of MainWindow into WinX
     put the y of MainWindow into WinY
     put the width of MainWindow into WinW
@@ -170,9 +270,10 @@ SaveGeometry:
     set entry `y` of Conf to WinY
     set entry `width` of Conf to WinW
     set entry `height` of Conf to WinH
+    set entry `file` of Conf to Watched
     save prettify Conf to `.mdshow.conf`
     stop
 
 
-!! @hash 44449fe7
+!! @hash 9574daa9
 !!!

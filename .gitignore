@@ -1,0 +1,5 @@
+# Where mdshow keeps the file being watched and the window's position and size.
+.mdshow.conf
+
+# A virtual environment for the AllSpeak runtime.
+.venv/

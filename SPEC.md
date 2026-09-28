@@ -1,0 +1,3 @@
+I've set up a new repo at github.com/easycoder/mdshow and copied everything from the dev/diffshow folder here into dev/mdshow (the current folder). I'd like to continue development, and make it more general-purpose.
+
+When the app starts it looks in .mdshow.conf for the name of the file to monitor, as "file": "<path>". If there is none it puts up a file browser. Any text file is accepted, the path is saved in .mdshow.conf and displays as at present. Markdown files get the HTML tretment; everything else just shows plain text. Change monitoring is done as at present. At the top of the window is a Select File button, which brings up the file browser again.
